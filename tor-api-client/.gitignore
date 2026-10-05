@@ -1,0 +1,23 @@
+# Secrets / configuration locale
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environnements virtuels
+.venv/
+venv/
+
+# Outils
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,5 @@
+# Dépendances d'exécution (identiques à pyproject.toml).
+# requests[socks] installe PySocks, indispensable pour les proxys socks5h://.
+requests[socks]>=2.32,<3
+stem>=1.8.2,<2
+python-dotenv>=1.0,<2
