@@ -318,6 +318,7 @@ backoff simple : le nombre total de tentatives reste borné.
 | `RETRY_AFTER_MAX` | `120` | au-delà, abandon plutôt qu'attente |
 | `ROTATE_ON_5XX` | `false` | NEWNYM aussi sur 5xx |
 | `RETRY_NON_IDEMPOTENT` | `false` | rejouer POST/PATCH potentiellement reçus |
+| `REQUIRE_TOR` | `false` | fail-closed : confirmer que le trafic passe par Tor avant d'émettre, sinon refuser (anti-fuite) |
 | `TOR_CHECK_URL` | `https://check.torproject.org/api/ip` | doit renvoyer `{"IsTor": ...}` |
 | `IP_CHECK_URL` | `https://check.torproject.org/api/ip` | JSON (`IP`, `ip`, `origin`, `query`) ou texte brut |
 | `ALLOWED_HOSTS` | vide | liste blanche d'hôtes (sous-domaines inclus) |
@@ -325,6 +326,47 @@ backoff simple : le nombre total de tentatives reste borné.
 | `LOG_LEVEL` | `INFO` | niveau de log (CLI / scripts) |
 
 Les variables déjà présentes dans l'environnement sont prioritaires sur le `.env`.
+
+## Vie privée : ce que ce client protège, et ce qu'il ne protège pas
+
+Ce client sécurise le **transport** d'appels API : tout passe par Tor, la
+résolution DNS comprise. C'est utile pour ne pas exposer votre IP à l'API
+appelée. Mais **un script Python via Tor ne vous rend pas anonyme pour naviguer**,
+et plusieurs protections essentielles se situent *hors* de ce code.
+
+**Ce que le client garantit (couche transport) :**
+
+- Trafic et DNS via Tor, grâce à `socks5h://` (le client **refuse** de démarrer
+  si la session n'utilise pas `socks5h` : pas de résolution DNS en local).
+- `trust_env = False` et argument `proxies` interdit : les variables
+  `HTTP(S)_PROXY` / `NO_PROXY` ne peuvent pas faire sortir le trafic hors de Tor.
+- `REQUIRE_TOR=true` (*fail-closed*) : avant la première requête, le client
+  confirme via `TOR_CHECK_URL` que le trafic sort bien par Tor et **refuse
+  d'émettre** sinon. À activer si une fuite en clair serait inacceptable.
+- Logs sans URL complète, identifiants ni corps.
+
+**Ce que le client NE protège PAS (à traiter en dehors) :**
+
+- **Navigation web anonyme → utilisez le [Tor Browser](https://www.torproject.org/).**
+  C'est le seul moyen sérieux d'éviter le *fingerprinting* : votre navigateur
+  (polices, taille d'écran, canvas, extensions…) vous identifie bien au-delà de
+  l'IP. Un client HTTP maison n'uniformise rien de tout cela.
+- **Fuites WebRTC** : propres au navigateur, sans objet pour un client `requests`,
+  mais à neutraliser si vous naviguez par ailleurs.
+- **Cloisonnement du système** : pour un vrai modèle de menace, faites passer
+  *tout* le trafic de la machine par Tor et isolez les applications avec un
+  système dédié — **[Tails](https://tails.net/)** (amnésique, live USB),
+  **[Whonix](https://www.whonix.org/)** (gateway Tor + workstation isolée) ou
+  **[Qubes OS](https://www.qubes-os.org/)**. Seul ce niveau empêche qu'une appli
+  mal configurée contourne Tor.
+- **Corrélation de trafic** : Tor ne protège pas contre un adversaire capable
+  d'observer à la fois l'entrée et la sortie du réseau.
+- **Ce que vous envoyez** : identifiants, cookies, données personnelles dans le
+  corps ou les en-têtes restent visibles du service appelé, Tor ou pas.
+
+Tor est lent par conception (trois sauts chiffrés) : ne cherchez pas à « accélérer »
+en multipliant circuits et concurrence, cela dégrade l'anonymat et surcharge un
+réseau tenu par des bénévoles.
 
 ## Sécurité
 

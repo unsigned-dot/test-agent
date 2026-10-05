@@ -49,6 +49,11 @@ def socks_error(message: str) -> requests.ConnectionError:
 def make_session(*results):
     session = MagicMock(spec=requests.Session)
     session.adapters = {"https://": MagicMock(), "http://": MagicMock()}
+    session.proxies = {
+        "http": "socks5h://127.0.0.1:9050",
+        "https": "socks5h://127.0.0.1:9050",
+    }
+    session.trust_env = True
     session.request.side_effect = list(results)
     return session
 
@@ -92,6 +97,7 @@ def test_request_goes_through_socks5h_with_timeout(config):
 
 def test_provided_session_is_forced_to_ignore_env_proxies(config):
     session = requests.Session()
+    session.proxies.update(config.proxies)  # socks5h, requis par le garde anti-fuite
     assert session.trust_env is True
     TorApiClient(config, session=session)
     assert session.trust_env is False
@@ -479,3 +485,33 @@ def test_parse_retry_after():
     assert parse_retry_after("bientôt") is None
     assert parse_retry_after(format_datetime(now + timedelta(seconds=30), usegmt=True), now=now) == 30.0
     assert parse_retry_after(format_datetime(now - timedelta(seconds=30), usegmt=True), now=now) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# Confidentialité : anti-fuite DNS et fail-closed
+# --------------------------------------------------------------------------- #
+def test_client_refuses_session_without_socks5h(config):
+    session = requests.Session()
+    session.proxies.update({"http": "socks5://127.0.0.1:9050", "https": "socks5://127.0.0.1:9050"})
+    with pytest.raises(ConfigurationError, match="socks5h"):
+        TorApiClient(config, session=session)
+
+
+def test_require_tor_blocks_requests_when_unconfirmed():
+    config = TorConfig.from_env({"REQUIRE_TOR": "true"})
+    client, session, _, _, _ = make_client(config, make_response(200))
+    # check_tor_connection utilise session.get ; on simule un service non confirmé.
+    session.get = MagicMock(return_value=make_response(200, b'{"IsTor": false}'))
+    with pytest.raises(TorProxyUnavailableError):
+        client.get(URL)
+    session.request.assert_not_called()  # aucune requête applicative émise
+
+
+def test_require_tor_allows_requests_once_confirmed():
+    config = TorConfig.from_env({"REQUIRE_TOR": "true"})
+    client, session, _, _, _ = make_client(config, make_response(200), make_response(200))
+    session.get = MagicMock(return_value=make_response(200, b'{"IsTor": true, "IP": "185.220.101.1"}'))
+    assert client.get(URL).status_code == 200
+    session.get.assert_called_once()  # vérification faite une seule fois
+    client.get(URL)
+    session.get.assert_called_once()

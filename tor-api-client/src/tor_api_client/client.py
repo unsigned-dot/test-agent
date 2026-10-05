@@ -259,6 +259,33 @@ class TorApiClient:
         self._rotate_circuit = rotate_circuit or rotate_tor_circuit
         self._wait_until_ready = wait_until_ready or wait_for_tor_ready
         self._sleep = sleep or time.sleep
+        # Garantie anti-fuite DNS : le trafic doit passer par socks5h:// (la
+        # résolution DNS est alors faite par le nœud de sortie Tor, pas en local).
+        for scheme in ("http", "https"):
+            if not self.session.proxies.get(scheme, "").startswith("socks5h://"):
+                raise ConfigurationError(
+                    "La session doit utiliser un proxy socks5h:// pour éviter toute "
+                    "fuite DNS ; utilisez create_tor_session() ou laissez le client "
+                    "créer la session lui-même."
+                )
+        # Vérification fail-closed déclenchée à la première requête.
+        self._tor_verified = not self.config.require_tor
+
+    def _verify_tor_or_fail(self) -> None:
+        """Confirme que le trafic sort par Tor, sinon lève une exception.
+
+        Appelé une seule fois, avant la première requête, quand REQUIRE_TOR est
+        activé : préfère ne rien envoyer plutôt que de risquer une fuite en clair.
+        """
+        from .tor import check_tor_connection
+
+        logger.info("Vérification fail-closed : confirmation que le trafic passe par Tor")
+        if not check_tor_connection(self.config, session=self.session):
+            raise TorProxyUnavailableError(
+                "Impossible de confirmer que le trafic passe par Tor (REQUIRE_TOR actif) : "
+                "aucune requête ne sera émise pour éviter une fuite en clair."
+            )
+        self._tor_verified = True
 
     # ------------------------------------------------------------------ #
     def __enter__(self) -> TorApiClient:
@@ -318,6 +345,8 @@ class TorApiClient:
         """
         method = method.upper()
         validate_url(url, self.config.allowed_hosts)
+        if not self._tor_verified:
+            self._verify_tor_or_fail()
         if "proxies" in kwargs:
             raise TypeError("L'argument 'proxies' est interdit : tout le trafic passe par Tor.")
         if kwargs.get("timeout") is None:

@@ -61,6 +61,12 @@ class TorConfig:
     rotate_on_5xx: bool = False
     retry_non_idempotent: bool = False
 
+    # Confidentialité : si True, le client vérifie que le trafic sort bien par
+    # Tor (via tor_check_url) avant d'émettre la première requête, et refuse
+    # d'émettre sinon (fail-closed) — évite toute fuite en clair si Tor est mal
+    # configuré ou arrêté.
+    require_tor: bool = False
+
     tor_check_url: str = "https://check.torproject.org/api/ip"
     ip_check_url: str = "https://check.torproject.org/api/ip"
 
@@ -167,6 +173,7 @@ class TorConfig:
             retry_after_max=reader.get_float("RETRY_AFTER_MAX", 120.0),
             rotate_on_5xx=reader.get_bool("ROTATE_ON_5XX", False),
             retry_non_idempotent=reader.get_bool("RETRY_NON_IDEMPOTENT", False),
+            require_tor=reader.get_bool("REQUIRE_TOR", False),
             tor_check_url=reader.get_str("TOR_CHECK_URL", "https://check.torproject.org/api/ip"),
             ip_check_url=reader.get_str("IP_CHECK_URL", "https://check.torproject.org/api/ip"),
             allowed_hosts=reader.get_list("ALLOWED_HOSTS"),
