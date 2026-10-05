@@ -1,0 +1,21 @@
+## Ajouts pour tor-api-client -- à placer dans /etc/tor/torrc (Debian/Ubuntu).
+## Vérifier ensuite : sudo -u debian-tor tor --verify-config
+
+## Trafic applicatif : proxy SOCKS uniquement en local.
+SocksPort 127.0.0.1:9050
+
+## ControlPort uniquement en local (jamais 0.0.0.0).
+ControlPort 127.0.0.1:9051
+
+## Authentification par cookie, obligatoire.
+CookieAuthentication 1
+## Rend le cookie lisible par le groupe de Tor (debian-tor sous Debian/Ubuntu).
+CookieAuthFileGroupReadable 1
+## Sous Debian/Ubuntu, le cookie est déjà placé ici par
+## /usr/share/tor/tor-service-defaults-torrc ; la ligne est explicitée par clarté.
+CookieAuthFile /run/tor/control.authcookie
+
+## Alternative (au lieu du cookie) : mot de passe haché.
+##   tor --hash-password 'mot-de-passe-long-et-aleatoire'
+##   HashedControlPassword 16:XXXXXXXX...
+## puis TOR_CONTROL_PASSWORD dans le .env (jamais dans le code).
