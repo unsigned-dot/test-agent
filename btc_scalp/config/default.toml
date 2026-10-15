@@ -1,0 +1,113 @@
+# Configuration par défaut — recherche sur données Binance USDⓈ-M, exécution prévue
+# Kraken Derivatives EU (PF_XBTUSD). Cahier des charges v2 (14/10/2026) : sections 2, 5, 7.
+# Toute modification des limites de [risk] exige l'autorisation explicite d'Hugo
+# et un changement versionné de ce fichier.
+
+[data]
+symbol = "BTCUSDT"
+market = "um"                 # USDⓈ-M futures (données de recherche)
+raw_dir = "data/raw"
+cache_dir = "data/cache"
+start = "2024-10-01"          # inclus — 24 mois (section 1)
+end = "2026-09-30"            # inclus
+datasets = ["aggTrades", "metrics", "fundingRate"]   # "bookTicker" optionnel (disponibilité à vérifier)
+spot_leadlag = false          # si true : télécharge aussi aggTrades spot BTCUSDT (NON branché sur les facteurs)
+metrics_lag_seconds = 360     # une ligne metrics (create_time T) n'est utilisée qu'à T + 360 s :
+                              # T peut être le début de la période de 5 min ; publication À VÉRIFIER
+
+[bars]
+freq_seconds = 5              # pas de décision (barres temporelles construites depuis aggTrades)
+close_grace_ms = 300          # le robot clôt la barre [t, t+F) à t+F+300 ms (trades en retard) et ne décide
+                              # qu'ensuite : SOURCE UNIQUE, lue par le robot ET ajoutée à la latence
+                              # d'entrée du backtest (scalp.config.entry_latency_ms)
+
+# Paramètres d'exécution indépendants de la plateforme.
+[costs]
+latency_ms = 300              # envoi d'un ordre -> ordre arrivé chez Kraken (retard du flux, calcul, réseau) ;
+                              # sert aussi à poser le TP et à la sortie à durée max. Latence d'ENTRÉE effective
+                              # (fin de barre -> ordre arrivé) = [bars].close_grace_ms + latency_ms = 600 ms :
+                              # hypothèse prudente pour un VPS européen. Sensibilité : 250 / 600 / 1000 ms.
+stop_latency_ms = 250         # déclenchement du stop -> exécution au marché
+max_fill_wait_ms = 5000       # aucun trade dans ce délai après l'arrivée -> pas de trade (trou de données)
+default_funding_rate_8h = 0.0001   # utilisé seulement sans fichier de funding ; proratisé à l'intervalle
+
+# Plateforme dont le profil de coûts est utilisé par le backtest.
+# La stratégie n'est validée qu'avec "kraken" (profil le plus pénalisant, section 5).
+[venue]
+execution = "kraken"
+
+[venues.binance]
+maker_fee_bps = 2.0
+taker_fee_bps = 5.0
+tick_size = 0.1
+lot_size = 0.001              # À VÉRIFIER via exchangeInfo (section 11)
+extra_slippage_bps = 0.5      # par jambe taker, au-delà du prix du 1er trade observé
+impact_bps_per_btc = 0.05     # impact linéaire par BTC exécuté en taker
+funding_interval_hours = 8
+funding_accrual = "discrete"  # payé aux instants de funding (00h, 08h, 16h UTC)
+
+[venues.kraken]
+maker_fee_bps = 2.0
+taker_fee_bps = 5.0
+tick_size = 1.0               # PF_XBTUSD : 1 USD
+lot_size = 0.0001             # 0,0001 BTC
+extra_slippage_bps = 1.0      # HYPOTHÈSE non mesurée : majorée (liquidité plus faible)
+impact_bps_per_btc = 0.5      # HYPOTHÈSE non mesurée : majorée (liquidité plus faible)
+funding_interval_hours = 1
+funding_accrual = "continuous"  # accru en continu, réglé chaque heure ou au changement de position
+
+[risk]
+initial_equity = 1000.0       # USDT, capital de référence
+risk_per_trade_fraction = 0.005   # ≈ 0,5 % du capital courant par trade
+max_leverage = 3.0            # marge isolée, levier ≤ 3 (Kraken autorise 10)
+min_free_capital_fraction = 0.5   # ≥ 50 % du capital non engagé en marge
+maintenance_margin_rate = 0.05    # Kraken : marge de maintenance = moitié de la marge initiale du contrat
+                                  # (10 % au levier max 10x -> 5 %) ; sert au contrôle stop vs liquidation
+stop_max_fraction_of_liq = 0.5    # stop à moins de 50 % de la distance de liquidation
+max_daily_loss_fraction = 0.03    # arrêt jusqu'au lendemain UTC
+max_weekly_loss_fraction = 0.06   # arrêt jusqu'à la semaine suivante (lundi UTC)
+reduced_size_mult = 0.5       # reprise automatique à 50 % de taille
+kill_drawdown_usdt = 150.0    # coupe-circuit définitif (depuis le sommet)
+kill_drawdown_fraction = 0.15 # idem en fraction du sommet (le premier atteint déclenche)
+max_trades_per_day = 100
+cooldown_seconds = 10
+no_trade_weekdays = [5, 6]    # 0 = lundi ; 5, 6 = samedi, dimanche (UTC)
+
+[exits]
+stop_bps = 25.0
+take_profit_bps = 35.0
+time_stop_seconds = 300
+take_profit_as_maker = true   # TP en ordre limite passif (fill seulement si traversé)
+
+[maker_entry]
+enabled = false               # entrée passive au meilleur prix inféré
+timeout_seconds = 10
+
+[split]
+dev_fraction = 0.6
+val_fraction = 0.2            # le reste = test final verrouillé
+min_test_days = 60            # critère go/no-go n° 8 (ajout audit) : ≥ 60 jours de trading dans le test
+                              # (≈ 12 semaines ; 24 mois -> ≈ 104 j de test attendus)
+
+[walkforward]
+train_days = 20
+test_days = 5
+min_trades_train = 30
+
+[bootstrap]
+n_resamples = 2000
+block_days = 3                # bootstrap par blocs de 3 jours de trading consécutifs
+min_days = 20                 # en dessous : IC 95 % et DSR « non calculables » (critères non remplis)
+seed = 12345
+
+[ml]
+horizon_seconds = 60
+min_edge_bps = 12.0           # cible : +X % ≈ 0,12 % (couvre l'aller-retour taker)
+prob_threshold = 0.6
+seed = 7
+# Grilles fixées AVANT tout test (chaque combinaison compte dans le DSR)
+label_grid = [[12.0, 25.0, 60.0], [35.0, 25.0, 300.0]]   # [take-profit bps, stop bps, horizon s]
+threshold_grid = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80]
+min_trades_val = 30           # nb minimal de trades sur val pour qu'un seuil soit sélectionnable
+n_random_benchmarks = 20      # graines d'entrées aléatoires appariées
+train_stride = 6              # sous-échantillonnage des barres d'entraînement (autocorrélation)

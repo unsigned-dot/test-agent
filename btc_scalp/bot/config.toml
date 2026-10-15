@@ -1,0 +1,67 @@
+# Configuration du robot — MODE PAPER UNIQUEMENT (cahier des charges v2, section 8).
+#
+# Les limites de risque, les coûts et les sorties NE SONT PAS ici : ils sont lus dans
+# config/default.toml (source unique, versionnée). Une section [risk], [costs] ou [exits]
+# dans ce fichier fait REFUSER le démarrage (aucun moyen détourné de relever les limites).
+#
+# Aucun secret ici : le token Telegram est lu dans une variable d'environnement ou dans
+# un fichier .env HORS du dépôt (voir [telegram]).
+
+mode = "paper"                       # seul mode accepté ; toute autre valeur => refus de démarrer
+research_config = "../config/default.toml"   # relatif à ce fichier (ou chemin absolu)
+
+[market]
+product_id = "PF_XBTUSD"
+ws_url = "wss://futures.kraken.com/ws/v1"
+rest_url = "https://futures.kraken.com/derivatives/api/v3"
+
+[feed]
+stale_after_s = 15          # aucun message (trade/book/ticker/heartbeat) depuis 15 s => flux périmé, pause
+flatten_after_s = 120       # flux périmé depuis 120 s avec position ouverte => fermeture au marché
+post_gap_pause_s = 900      # après un trou de données : pas d'entrée pendant 15 min (fenêtres courtes ≤ 15 min ;
+                            # les facteurs 1 h / 24 h gardent la trace du trou plus longtemps, comme en recherche)
+reconnect_min_s = 1.0       # backoff exponentiel de reconnexion (avec gigue)
+reconnect_max_s = 60.0
+ping_interval_s = 20        # doc Kraken : « ping au moins toutes les 60 s »
+# grâce de clôture de barre : [bars].close_grace_ms de config/default.toml (source unique, car elle
+# fait partie de la latence d'entrée du backtest) ; une clé bar_close_grace_ms ici est refusée.
+max_feed_lag_ms = 2000      # retard médian (réception - horodatage Kraken) au-delà => pause
+max_jump_bps = 200.0        # saut de prix entre deux trades au-delà => données suspectes, pause
+seq_gap_action = "pause"    # "pause" | "log" — continuité de `seq` du feed trade : À VÉRIFIER en réel
+clock_check_interval_s = 600
+max_clock_offset_ms = 1000  # |horloge locale - serveur Kraken| au-delà => pause
+require_clock_check = true  # pas d'entrée tant que l'horloge n'a pas été contrôlée
+
+[bars]
+window_hours = 25           # historique glissant pour les facteurs (vol_regime : 1 h / médiane 24 h) ; minimum vérifié
+warmup_s = 90000            # pas d'entrée pendant 25 h après le démarrage : avant, vol_regime (médiane 24 h)
+                            # est calculé sur un historique tronqué, donc DIFFÉRENT de la recherche.
+                            # (1 h suffisait pour les facteurs ≤ 15 min ; décision à revoir par Hugo si le
+                            # modèle validé n'utilise pas vol_regime.)
+
+[strategy]
+name = "none"               # "none" (défaut : aucune stratégie validée => aucune entrée)
+                            # "dry_signal" : règle de RÉFÉRENCE pour tester la mécanique (trades marqués dry)
+dry_rule = "B_naive_momentum"
+dry_params = { w = 12, th = 10.0 }
+
+[storage]
+data_dir = "../var/data"            # enregistrements Kraken compressés (jsonl.gz horaires)
+state_db = "../var/state.sqlite"    # état du robot (ordres, positions, décisions, risque)
+paper_db = "../var/paper_exchange.sqlite"   # « plateforme » simulée (séparée exprès)
+log_dir = "../var/log"
+flush_interval_s = 5        # vidage des fichiers compressés (perte max en cas de crash)
+min_free_disk_gb = 2.0      # alerte si l'espace disque libre passe dessous
+
+[telegram]
+enabled = true
+token_env = "BTC_SCALP_TELEGRAM_TOKEN"
+chat_id_env = "BTC_SCALP_TELEGRAM_CHAT_ID"
+env_file = "~/.config/btc_scalp/telegram.env"   # HORS dépôt ; lignes CLE=valeur
+poll_interval_s = 3
+
+[monitor]
+slippage_alert_margin_bps = 2.0     # section 7 : slippage observé > modèle + 2 bp => alerte (arrêt du passage)
+min_trades_for_drift = 20
+expected_spread_ticks = 1.0         # hypothèse du backtest (spread minimal = 1 tick)
+status_interval_s = 21600           # résumé périodique Telegram (6 h)
