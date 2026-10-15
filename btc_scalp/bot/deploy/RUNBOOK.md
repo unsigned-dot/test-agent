@@ -40,16 +40,8 @@ Le script :
 4. Seul ce chat id peut envoyer `/status` et `/stop`. Les autres expéditeurs sont ignorés.
 
 ### Test sous Windows (sans VPS)
-```powershell
-cd btc_scalp
-py -3.13 -m venv .venv ; .venv\Scripts\activate
-pip install -r bot\requirements.txt
-python -m bot check-config
-python -m bot demo --minutes 120          # faux flux, aucun réseau
-python -m unittest discover -s tests -p "test_bot_*.py" -v
-$env:BTC_SCALP_TELEGRAM_TOKEN="..." ; $env:BTC_SCALP_TELEGRAM_CHAT_ID="..."
-python -m bot run                          # flux Kraken réel (Ctrl+C pour arrêter)
-```
+Voir `docs/WINDOWS.md` : installation en une commande (`install.ps1`), lanceurs
+`lancer_robot.bat`, `tableau_de_bord.bat` et `sonde_kraken.bat`.
 
 ## 2. Démarrage
 
@@ -74,6 +66,16 @@ tant que l'horloge n'a pas été contrôlée face à Kraken.
 | Spread observé | `/status` montre la ligne « Spread carnet » ; une médiane de plus de 1 tick signifie que l'hypothèse du backtest est optimiste (à signaler) |
 | Stratégie | `stratégie none` (par défaut) : la table `decisions` ne contient que `no_signal` ou `paused` |
 | Disque | `df -h /opt/btc_scalp` ; prévoir environ 0,5 à 2 Go par jour selon l'activité du carnet (**à mesurer** la première semaine) |
+
+### Tableau de bord depuis le PC (tunnel SSH)
+Le tableau de bord écoute uniquement sur 127.0.0.1 : il n'est jamais exposé sur internet.
+```bash
+# sur le VPS (dans tmux/screen, ou en arrière-plan)
+cd /opt/btc_scalp && sudo -u btcbot .venv/bin/python -m bot dashboard --no-browser
+# sur le PC
+ssh -N -L 8050:127.0.0.1:8050 user@vps
+```
+Puis ouvrir http://127.0.0.1:8050 sur le PC. Lecture seule : aucune action possible depuis la page.
 
 Une fois par jour : `/status`, l'espace disque, et le journal
 `sudo -u btcbot /opt/btc_scalp/.venv/bin/python -m bot status`.

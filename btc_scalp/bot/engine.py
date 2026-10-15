@@ -649,3 +649,47 @@ class Engine:
         if al:
             lines.append("Alertes actives : " + ", ".join(al))
         return "\n".join(lines)
+
+    # ===================================================================== tableau de bord
+    def snapshot(self, now_ms: int) -> dict:
+        """État courant en mémoire (flux, carnet, risque, blocages), sérialisable en JSON.
+
+        Lu par le tableau de bord (processus séparé, lecture seule) : le moteur ne dépend jamais
+        de lui. Mêmes informations que /status, sous forme structurée.
+        """
+        r = self.risk
+        snow = self.server_now(now_ms)
+        bb, ba = self.book.best()
+        warm_left = None
+        if self.started_ms is not None:
+            warm_left = max(0, (self.started_ms + self.warmup_ms - now_ms) // 1000)
+        return {
+            "ts_ms": now_ms, "pid": self.pid, "mode": self.cfg.mode, "strategy": self.strategy.name,
+            "research_hash": self.cfg.research_hash, "started_ms": self.started_ms,
+            "warmup_left_s": warm_left, "warmup_total_s": self.warmup_ms // 1000,
+            "feed": {"connected": self.connected, "connections": self.connections,
+                     "last_msg_age_s": (now_ms - self.last_msg_ms) / 1000 if self.last_msg_ms else None,
+                     "median_lag_ms": self.monitor.median_lag(), "clock_offset_ms": self.clock_offset_ms,
+                     "counters": dict(self.monitor.counters)},
+            "market": {"last_px": self.last_trade_px, "last_trade_ts": self.last_trade_ts,
+                       "mark_px": self.mark_px, "bid": bb, "ask": ba,
+                       "relative_funding_rate": getattr(self.ticker, "relative_funding_rate", None),
+                       "spread": self.monitor.spread_summary()},
+            "risk": {"equity": r.equity, "peak_equity": r.peak_equity, "day_trades": r.day_trades,
+                     "max_drawdown_usdt": r.kill_dd_usdt, "max_trades_per_day": r.max_trades,
+                     "size_mult": r.size_mult(snow), "killed": r.killed, "kill_reason": r.kill_reason,
+                     "halt_until_ms": r.halt_until_ms if r.halt_until_ms > snow else None},
+            "stopped": self.stopped, "reconcile_divergence": self.reconcile_divergence,
+            "gates": self.gate_reasons(now_ms), "alerts": self.monitor.active(),
+            "recorder": None if self.recorder is None else
+            {"lines": self.recorder.lines, "mb": self.recorder.bytes_written / 1e6},
+        }
+
+    def write_snapshot(self, now_ms: int) -> None:
+        """Un échec ici ne doit JAMAIS arrêter le robot : le tableau de bord est accessoire."""
+        try:
+            self.state.set("live_snapshot", self.snapshot(now_ms))
+        except Exception as e:  # noqa: BLE001
+            self.monitor.inc("snapshot_errors")
+            if self.monitor.counters["snapshot_errors"] == 1:
+                self.log("ERROR", f"instantané du tableau de bord impossible : {e!r}")

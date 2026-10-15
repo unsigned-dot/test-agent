@@ -9,6 +9,7 @@ Commandes :
   demo           rejeu d'un faux flux synthétique (aucun réseau) dans un dossier temporaire
   check-config   vérifie la configuration (mode paper, sections interdites, secrets) et sort
   status         affiche l'état depuis la base SQLite (sans démarrer le robot)
+  dashboard      tableau de bord local en lecture seule (http://127.0.0.1:8050), processus séparé
   stop           pose l'arrêt persistant (équivalent /stop) ; le robot ferme la position au prochain tick
   emergency-stop arrêt + fermeture IMMÉDIATE de la position paper et annulation des ordres
   resume         lève un /stop (sur le serveur uniquement ; confirmation explicite)
@@ -84,6 +85,8 @@ def cmd_demo(args) -> int:
     n = sum(1 for f in files for _ in read_records(f))
     print(f"enregistrement : {len(files)} fichiers, {n} lignes relues")
     print("dossier :", out)
+    eng.write_snapshot(msgs[-1][0])
+    print(f"tableau de bord de la démo : python -m bot dashboard --state-db \"{out / 'state.sqlite'}\"")
     state.close()
     broker.close()
     return 0
@@ -115,6 +118,12 @@ def cmd_status(args) -> int:
     for e in state.events(15):
         print(f"  {e['ts_ms']} {e['level']} {e['kind']}: {e['msg'][:160]}")
     return 0
+
+
+def cmd_dashboard(args) -> int:
+    from .dashboard import serve
+    db = args.state_db or _cfg(args).storage_path("state_db")
+    return serve(db, host=args.host, port=args.port, open_browser=not args.no_browser)
 
 
 def cmd_stop(args) -> int:
@@ -181,13 +190,19 @@ def main(argv=None) -> int:
     d.add_argument("--out", default=None)
     sub.add_parser("check-config")
     sub.add_parser("status")
+    db = sub.add_parser("dashboard")
+    db.add_argument("--port", type=int, default=8050)
+    db.add_argument("--host", default="127.0.0.1")
+    db.add_argument("--state-db", default=None, help="base d'état à afficher (défaut : celle de la config)")
+    db.add_argument("--no-browser", action="store_true")
     sub.add_parser("stop")
     sub.add_parser("emergency-stop")
     r = sub.add_parser("resume")
     r.add_argument("--confirm", default="")
     args = p.parse_args(argv)
     return {"run": cmd_run, "demo": cmd_demo, "check-config": cmd_check, "status": cmd_status,
-            "stop": cmd_stop, "emergency-stop": cmd_emergency, "resume": cmd_resume}[args.cmd](args)
+            "dashboard": cmd_dashboard, "stop": cmd_stop, "emergency-stop": cmd_emergency,
+            "resume": cmd_resume}[args.cmd](args)
 
 
 if __name__ == "__main__":

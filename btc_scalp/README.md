@@ -2,7 +2,14 @@
 
 Pipeline de **recherche** pour le robot de scalping BTC perpétuel : exécution prévue sur Kraken
 Derivatives EU (PF_XBTUSD), recherche sur les données publiques Binance USDⓈ-M. Le cahier des
-charges v2 (14/10/2026) fait foi.
+charges v3 (15/10/2026) fait foi.
+
+**Robot paper sur PC Windows, tableau de bord en direct et sonde Kraken : voir
+[`docs/WINDOWS.md`](docs/WINDOWS.md).**
+
+Décisions de la section 0 du cahier des charges v3, validées le 15/10/2026 : latence de base
+600 ms ; marge de maintenance 0,05 ; critère n° 8 (≥ 60 jours de trading dans le test final) ;
+préchauffage de 25 h après chaque redémarrage ; modèle limité aux facteurs issus des trades.
 
 Étape 1 seulement : **un** modèle de gradient boosting (un classifieur long, un short) qui estime la
 probabilité qu'un trade soit rentable après coûts, et qui ne trade pas sous le seuil. Aucune stratégie
@@ -132,9 +139,11 @@ Chaque run écrit dans `runs/<id>/` : `run.log`, `config.toml` (copie) et `confi
 | `scalp/validation.py` | Split, purge, walk-forward, verrou, essais, évaluation, orchestration |
 | `scalp/report.py` | `report.md` et graphiques |
 | `scripts/run_pipeline.py` | CLI |
+| `scripts/kraken_probe.py` | Sonde des API publiques Kraken (accès, profondeur d'historique, débit, WebSocket) |
+| `bot/dashboard.py` | Tableau de bord local en lecture seule (`python -m bot dashboard`) |
 | `tests/` | Tests unittest (`python -m unittest discover -s tests`) |
 
-Le robot live (`bot/`) est hors du périmètre de l'étape 1. Pour charger le modèle :
+Le robot paper (`bot/`, voir `bot/deploy/RUNBOOK.md` et `docs/WINDOWS.md`) n'envoie aucun ordre réel. Pour charger le modèle :
 `TradeModel.load("runs/r1/model/model.pkl", expected_config_hash=...)`, puis `predict_proba(df)` et
 `decide(df, ExecParams.from_cfg(cfg, model.spec.exits_override()))` sur les facteurs de
 `features.add_features`. Le fichier pickle ne doit venir que de vos propres runs.

@@ -3,5 +3,7 @@ __pycache__/
 /data/
 runs/
 var/
-.venv/
+.venv
 *.env
+var_demo/
+requirements-lock-windows.txt

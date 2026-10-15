@@ -657,7 +657,10 @@ class TestWindowsAndLiveLoop(unittest.TestCase):
             self.assertEqual(len(rows), 40)
             st = State(cfg.storage_path("state_db"))
             kinds = [e["kind"] for e in st.events(50)]
+            snap = st.get("live_snapshot")          # écrit par la boucle live pour le tableau de bord
             st.close()
+            self.assertIsNotNone(snap)
+            self.assertEqual(snap["market"]["last_px"] // 10, 10000)
             self.assertIn("start", kinds)
             self.assertIn("shutdown", kinds)
             self.assertTrue(tg.deferred)

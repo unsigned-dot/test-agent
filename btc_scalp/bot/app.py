@@ -102,6 +102,7 @@ def apply_clock_check(eng: Engine, res) -> None:
 
 
 TELEGRAM_LONG_POLL_S = 10      # + 15 s de délai HTTP < TimeoutStopSec=30 : arrêt propre sous systemd
+SNAPSHOT_INTERVAL_S = 1.0      # instantané d'état pour le tableau de bord (une écriture SQLite par seconde)
 
 
 async def run_live(cfg: BotConfig, messages=kraken_messages, fetch=fetch_instruments, notifier=None) -> int:
@@ -168,10 +169,14 @@ def _live_tasks(eng: Engine, cfg: BotConfig, rec, stop_ev: asyncio.Event, resync
     async def timer():
         last_clock = time.monotonic()
         last_disk = 0.0
+        last_snap = 0.0
         while not stop_ev.is_set():
             await asyncio.sleep(0.25)
             t = now_ms()
             eng.tick(t)
+            if time.monotonic() - last_snap >= SNAPSHOT_INTERVAL_S:
+                last_snap = time.monotonic()
+                eng.write_snapshot(t)       # lu par le tableau de bord (python -m bot dashboard)
             if rec is not None and t - rec._last_flush >= rec.flush_ms:
                 rec.flush(t)
             if time.monotonic() - last_clock > b["feed"]["clock_check_interval_s"]:
