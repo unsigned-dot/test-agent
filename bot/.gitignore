@@ -1,0 +1,3 @@
+# jamais de secrets ni de données d'exécution dans le dépôt
+*.env
+.env

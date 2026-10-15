@@ -1,0 +1,40 @@
+# Service systemd du robot PAPER. Installé par deploy/install.sh dans /etc/systemd/system/.
+[Unit]
+Description=Robot BTC PF_XBTUSD — MODE PAPER (Kraken Derivatives, flux public)
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+# limite de redémarrages : 20 en 10 min, puis systemd abandonne (voir RUNBOOK 4.2).
+# Ces clés appartiennent à [Unit] (systemd >= 230) ; dans [Service] elles étaient ignorées.
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=btcbot
+Group=btcbot
+WorkingDirectory=/opt/btc_scalp
+EnvironmentFile=-/etc/btc_scalp/telegram.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/btc_scalp/.venv/bin/python -m bot run
+# redémarrage automatique (crash, coupure réseau prolongée...) ; 5 s entre deux essais
+Restart=always
+RestartSec=5
+# code 2 = configuration refusée (mode != paper, section interdite) : inutile de relancer en boucle
+RestartPreventExitStatus=2
+# arrêt propre : SIGTERM, 30 s pour vider les tampons d'enregistrement
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# durcissement
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ReadWritePaths=/opt/btc_scalp/var
+UMask=0027
+MemoryMax=1500M
+
+[Install]
+WantedBy=multi-user.target

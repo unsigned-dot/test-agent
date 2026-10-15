@@ -1,0 +1,7 @@
+# Dépendances du ROBOT (VPS). La recherche a les siennes dans ../requirements.txt.
+# Versions minimales testées par la doc ; figer les versions exactes après installation (pip freeze).
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11          # requis par scalp.data.synthetic (démo / tests)
+websockets>=12.0     # client WebSocket Kraken (import paresseux : seul `python -m bot run` en a besoin)
+# HTTP (Telegram, REST Kraken) : urllib de la bibliothèque standard, aucune dépendance.
