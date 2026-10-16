@@ -97,6 +97,8 @@ def _metrics_block(det: dict, label: str) -> str:
     out.append("\nSensibilité aux frais (espérance nette bps) : "
                + ", ".join(f"{k} → {_f(v)}" for k, v in fs.items()))
     out.append("\n\nPar heure UTC :\n\n" + _breakdown(det.get("by_hour"), "heure"))
+    out.append("\nPar jour de la semaine (UTC ; samedi et dimanche non tradés) :\n\n"
+               + _breakdown(det.get("by_dow"), "jour"))
     out.append("\nPar régime de volatilité (terciles de vol 1 h / médiane 24 h, bornes fixées sur dev) :\n\n"
                + _breakdown(det.get("by_regime"), "régime"))
     out.append("\nLong / short :\n\n" + _breakdown(det.get("by_side"), "sens"))
@@ -162,11 +164,27 @@ def write_report(run_dir: str | Path) -> Path:
         L.append(_table(wf["folds"], [("pli", "fold"), ("test", "test"), ("n entr.", "n_train"),
                                       ("purgés", "n_purged"), ("trades", "n_trades"),
                                       ("esp. nette", "exp_net_bps"), ("esp. brute", "exp_gross_bps"),
-                                      ("aléatoire esp. nette", "random_exp_net_bps")]))
+                                      ("aléatoire esp. nette", "random_exp_net_bps"),
+                                      ("figé esp. nette", "frozen_exp_net_bps")]))
+        rv = wf.get("retrain_vs_frozen")
+        if rv:
+            L.append("### Réentraînement glissant vs modèle figé (condition d'activation de l'étape 2)\n")
+            if rv.get("n_folds_compared"):
+                L.append(f"Plis comparés : {rv['n_folds_compared']} (le 1er pli est exclu : les deux modèles y "
+                         f"sont identiques). PnL net réentraîné {_f(rv['retrained_net_pnl'])} USDT contre "
+                         f"figé {_f(rv['frozen_net_pnl'])} USDT ; réentraîné meilleur sur "
+                         f"{rv['folds_retrained_better']}/{rv['n_folds_compared']} plis. "
+                         f"Espérance nette : réentraîné {_f(rv['retrained'].get('exp_net_bps'))} bps, "
+                         f"figé {_f(rv['frozen'].get('exp_net_bps'))} bps.\n")
+            L.append(f"**{rv['verdict']}.** Indicatif seulement : la cible et le seuil ont été choisis sur val.\n")
     for per in ("val", "test"):
         se = _load(d, f"sensitivity_{per}.json")
         if se:
-            L.append(f"## Sensibilités ({per}) : profil, latence, seuil\n")
+            L.append(f"## Sensibilités ({per}) : profil, latence, seuil, types d'ordres\n")
+            L.append("Types d'ordres (profil Kraken, mêmes signaux) : `ordres_tout_marche` = entrée et take-profit "
+                     "au marché ; `ordres_mixte` = entrée au marché, take-profit limite (défaut) ; "
+                     "`ordres_tout_limite` = entrée limite passive (annulée après le délai) et take-profit "
+                     "limite. Le stop reste toujours au marché.\n")
             rows = []
             for r in se["rows"]:
                 rr = dict(r)

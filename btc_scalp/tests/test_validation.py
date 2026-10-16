@@ -116,13 +116,57 @@ class TestEndToEndSynthetic(unittest.TestCase):
             run.save("source.json", sp)
             src = V.make_source(sp, cfg)
             V.run_research(run, src)
-            V.run_walkforward(run, src)
+            wf = V.run_walkforward(run, src)
+            self.assertIn("retrain_vs_frozen", wf)
+            self.assertIn("verdict", wf["retrain_vs_frozen"])
+            se = V.run_sensitivity(run, src, "val")
+            orders = {r["name"]: r for r in se["rows"] if r["name"].startswith("ordres_")}
+            self.assertEqual(set(orders), set(V.ORDER_TYPE_VARIANTS))
+            self.assertEqual({r["venue"] for r in orders.values()}, {"kraken"})
+            self.assertEqual((orders["ordres_tout_marche"]["maker_entry"], orders["ordres_tout_marche"]["tp_as_maker"]),
+                             (False, False))
+            self.assertEqual((orders["ordres_tout_limite"]["maker_entry"], orders["ordres_tout_limite"]["tp_as_maker"]),
+                             (True, True))
             ft = V.run_final_test(run, src)
             self.assertFalse(ft["criteria"]["verdict"].startswith("GO"))
             # 2e évaluation avec une autre config : refusée
             run2 = V.Run(d, "t", deep_update(cfg, {"ml": {"threshold_grid": [0.9]}}))
             with self.assertRaises(V.FinalTestLockError):
                 V.run_final_test(run2, src)
+
+
+class TestRetrainVsFrozen(unittest.TestCase):
+    """Condition d'activation de l'étape 2 : réentraîné meilleur en PnL cumulé ET sur une majorité de plis."""
+
+    @staticmethod
+    def _rows(pairs):
+        rows = [{"fold": 0, "net_pnl": 5.0, "frozen_n": None, "frozen_net_pnl": None}]
+        rows += [{"fold": i + 1, "net_pnl": a, "frozen_n": 10, "frozen_net_pnl": b} for i, (a, b) in enumerate(pairs)]
+        return rows
+
+    def _verdict(self, pairs):
+        import pandas as pd
+        aux = {"start_ms": 0, "end_ms": DAY * 5 - 1, "trading_days": list(range(5))}
+        cfg = {"risk": {"initial_equity": 1000.0}}
+        return V.retrain_vs_frozen(self._rows(pairs), pd.DataFrame(), [], aux, cfg)
+
+    def test_majority_and_total_required(self):
+        r = self._verdict([(10, 1), (10, 1), (-1, 0)])
+        self.assertEqual((r["n_folds_compared"], r["folds_retrained_better"]), (3, 2))
+        self.assertIn("fait mieux", r["verdict"])
+        # un seul gros pli gagné ne suffit pas (pas de majorité)
+        self.assertIn("PAS", self._verdict([(100, 0), (-1, 0), (-1, 0)])["verdict"])
+        # majorité de plis mais PnL cumulé inférieur : pas suffisant non plus
+        self.assertIn("PAS", self._verdict([(1, 0), (1, 0), (-50, 0)])["verdict"])
+
+    def test_first_fold_excluded_and_unmeasurable(self):
+        self.assertEqual(self._verdict([(1, 0)])["n_folds_compared"], 1)
+        import pandas as pd
+        r = V.retrain_vs_frozen(self._rows([]), pd.DataFrame(), [], {}, {})
+        self.assertEqual(r["n_folds_compared"], 0)
+
+    def test_weekday_names(self):
+        self.assertEqual(V.DOW_NAMES[[0, 4, 6]].tolist(), ["0_lundi", "4_vendredi", "6_dimanche"])
 
 
 if __name__ == "__main__":

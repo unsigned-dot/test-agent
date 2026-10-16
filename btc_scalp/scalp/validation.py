@@ -32,6 +32,15 @@ from .model import (TradeModel, LabelSpec, auc, feature_columns, feature_matrix,
 
 DAY_MS = 86_400_000
 LATENCY_GRID_MS = (250, 600, 1000)     # sensibilité : latence d'ENTRÉE effective (grâce de barre incluse)
+DOW_NAMES = np.array(["0_lundi", "1_mardi", "2_mercredi", "3_jeudi", "4_vendredi", "5_samedi", "6_dimanche"],
+                     dtype=object)
+# Comparaison des types d'ordres sur les MÊMES signaux (cahier des charges, section 1 « Type d'ordres ») :
+# le stop reste toujours un ordre au marché déclenché chez la plateforme (sécurité, section 8).
+ORDER_TYPE_VARIANTS = {
+    "ordres_tout_marche": {"maker_entry": {"enabled": False}, "exits": {"take_profit_as_maker": False}},
+    "ordres_mixte": {"maker_entry": {"enabled": False}, "exits": {"take_profit_as_maker": True}},
+    "ordres_tout_limite": {"maker_entry": {"enabled": True}, "exits": {"take_profit_as_maker": True}},
+}
 log = logging.getLogger("scalp")
 
 
@@ -435,6 +444,7 @@ def evaluate(src, days: list[int], strats: list[Strat], cfg: dict) -> tuple[dict
                 k = np.clip(np.searchsorted(ts, tr["signal_ts"].to_numpy(np.int64)), 0, len(ts) - 1)
                 tr["vol_regime"] = vr[k]
                 tr["hour"] = pd.to_datetime(tr["entry_ts"], unit="ms", utc=True).dt.hour
+                tr["dow"] = DOW_NAMES[pd.to_datetime(tr["entry_ts"], unit="ms", utc=True).dt.dayofweek.to_numpy()]
                 tr["strategy"] = s.name
                 busy_until[s.name] = int(tr["exit_ts"].max()) + int(r.get("cooldown_seconds", 0) * 1000)
             ctx["chunk_trades"][s.name] = tr
@@ -512,7 +522,7 @@ def detailed(tr: pd.DataFrame, aux: dict, cfg: dict, n_trials: int, sr_var: floa
         "max_dd_mtm_pct": metrics.max_drawdown_pct(mtm) if len(mtm) else float("nan"),
         "slippage_sensitivity": metrics.slippage_sensitivity(tr),
         "fee_sensitivity": _safe(lambda: metrics.fee_sensitivity(tr, cfg)),
-        "by_hour": bd("hour"), "by_regime": bd("regime"), "by_side": bd("side_name"),
+        "by_hour": bd("hour"), "by_dow": bd("dow"), "by_regime": bd("regime"), "by_side": bd("side_name"),
         "by_exit": bd("exit_reason"),
     }
 
@@ -748,25 +758,36 @@ def run_walkforward(run: Run, src) -> dict:
     if not folds:
         raise ValueError("pas assez de jours pour le walk-forward (réduire [walkforward].train_days)")
     min_tr = int(wf.get("min_trades_train", 30))
-    rows, all_tr = [], []
+    rows, all_tr, frozen_tr = [], [], []
+    frozen = None      # modèle du 1er pli valide, JAMAIS réentraîné (référence de l'étape 2 : figé vs réentraîné)
     for i, f in enumerate(folds):
         t0, t1 = f["test"][0] * DAY_MS, (f["test"][-1] + 1) * DAY_MS
         m, info = fit_model(ds, spec, f["train"], t0, t1, purge, thr, seed)
         if min(info.get("n_long", 0), info.get("n_short", 0)) < min_tr:
             log.warning("pli %d ignoré : trop peu d'échantillons d'entraînement", i)
             continue
+        first = frozen is None
+        if first:
+            frozen = m
         rnd = next(b for b in signals.BENCHMARKS if "random" in b.name)
-        res, aux = evaluate(src, f["test"], [model_strat("model", m, thr),
-                                            rule_strat(rnd, rnd.param_sets()[0], "benchmark", "random")], cfg)
+        strats = [model_strat("model", m, thr), rule_strat(rnd, rnd.param_sets()[0], "benchmark", "random")]
+        if not first:     # au 1er pli les deux modèles sont identiques : comparaison sans objet
+            strats.append(model_strat("frozen", frozen, thr))
+        res, aux = evaluate(src, f["test"], strats, cfg)
         sm = full_summary(res["model"], aux, cfg)
         sr = full_summary(res["random"], aux, cfg)
+        sf = full_summary(res["frozen"], aux, cfg) if not first else {}
         rows.append({"fold": i, "train": f"{day_str(f['train'][0])}→{day_str(f['train'][-1])}",
                      "test": f"{day_str(f['test'][0])}→{day_str(f['test'][-1])}", **info,
                      "n_trades": sm.get("n_trades"), "exp_net_bps": sm.get("exp_net_bps"),
                      "exp_gross_bps": sm.get("exp_gross_bps"), "net_pnl": sm.get("net_pnl"),
-                     "random_n": sr.get("n_trades"), "random_exp_net_bps": sr.get("exp_net_bps")})
+                     "random_n": sr.get("n_trades"), "random_exp_net_bps": sr.get("exp_net_bps"),
+                     "frozen_n": sf.get("n_trades"), "frozen_exp_net_bps": sf.get("exp_net_bps"),
+                     "frozen_net_pnl": sf.get("net_pnl")})
         if len(res["model"]):
             all_tr.append(res["model"].assign(fold=i))
+        if not first and len(res["frozen"]):
+            frozen_tr.append(res["frozen"].assign(fold=i))
         log.info("pli %d %s : %s trades, espérance nette %s bps", i, rows[-1]["test"], sm.get("n_trades"),
                  _fmt(sm.get("exp_net_bps")))
     tr = pd.concat(all_tr, ignore_index=True) if all_tr else pd.DataFrame()
@@ -777,11 +798,41 @@ def run_walkforward(run: Run, src) -> dict:
     no_wd = cfg["risk"].get("no_trade_weekdays", [])
     aux = {"start_ms": test_days[0] * DAY_MS, "end_ms": (test_days[-1] + 1) * DAY_MS - 1,
            "trading_days": [d for d in test_days if (d + 3) % 7 not in no_wd]}
+    cmp_days = sorted({d for r in rows if r.get("frozen_n") is not None for d in folds[r["fold"]]["test"]})
+    aux_cmp = {"start_ms": cmp_days[0] * DAY_MS, "end_ms": (cmp_days[-1] + 1) * DAY_MS - 1,
+               "trading_days": [d for d in cmp_days if (d + 3) % 7 not in no_wd]} if cmp_days else aux
     out = {"spec": spec.key, "threshold": thr, "purge_ms": purge, "n_folds": len(rows),
            "folds": rows, "aggregate": full_summary(tr, aux, cfg) if len(tr) else {"n_trades": 0},
-           "positive_folds": int(sum((r["net_pnl"] or 0) > 0 for r in rows))}
+           "positive_folds": int(sum((r["net_pnl"] or 0) > 0 for r in rows)),
+           "retrain_vs_frozen": retrain_vs_frozen(rows, tr, frozen_tr, aux_cmp, cfg)}
     run.save("walkforward.json", _clean(out))
     return out
+
+
+def retrain_vs_frozen(rows: list[dict], tr: pd.DataFrame, frozen_tr: list[pd.DataFrame], aux: dict,
+                      cfg: dict) -> dict:
+    """Étape 2 (condition d'activation) : le réentraînement glissant bat-il le modèle figé ?
+
+    Mesuré sur les plis 2..n uniquement (au 1er pli les deux modèles sont le même), sur les
+    mêmes jours et avec le même moteur. Indicatif : la cible et le seuil ont été choisis sur val
+    (voir les limites du walk-forward). « Le réentraînement aide » exige ici un PnL net cumulé
+    supérieur ET une majorité de plis gagnés ; c'est une condition nécessaire, pas une preuve.
+    """
+    cmp = [r for r in rows if r.get("frozen_n") is not None]
+    if not cmp:
+        return {"n_folds_compared": 0, "verdict": "non mesurable (moins de 2 plis valides)"}
+    tr_cmp = tr[tr["fold"].isin([r["fold"] for r in cmp])] if len(tr) else tr
+    fz = pd.concat(frozen_tr, ignore_index=True) if frozen_tr else pd.DataFrame()
+    ret_pnl = float(sum(r["net_pnl"] or 0.0 for r in cmp))
+    frz_pnl = float(sum(r["frozen_net_pnl"] or 0.0 for r in cmp))
+    wins = int(sum((r["net_pnl"] or 0.0) > (r["frozen_net_pnl"] or 0.0) for r in cmp))
+    helps = ret_pnl > frz_pnl and wins > len(cmp) / 2
+    return {"n_folds_compared": len(cmp), "retrained_net_pnl": ret_pnl, "frozen_net_pnl": frz_pnl,
+            "folds_retrained_better": wins,
+            "retrained": full_summary(tr_cmp, aux, cfg) if len(tr_cmp) else {"n_trades": 0},
+            "frozen": full_summary(fz, aux, cfg) if len(fz) else {"n_trades": 0},
+            "verdict": "le réentraînement fait mieux que le modèle figé (indicatif)" if helps
+            else "le réentraînement ne fait PAS mieux que le modèle figé"}
 
 
 # ----------------------------------------------------------------------------- test final
@@ -997,12 +1048,16 @@ def run_sensitivity(run: Run, src, period: str = "val") -> dict:
     for j in (i - 1, i + 1):           # voisinage du seuil (profil et latence de base)
         if 0 <= j < len(grid):
             variants.append((f"base_p{grid[j]:.2f}", cfg, grid[j]))
+    for name, ov in ORDER_TYPE_VARIANTS.items():     # profil Kraken (le plus pénalisant), latence de base
+        variants.append((name, deep_update(kraken_cfg(cfg), ov), thr))
     rows, base = [], None
     for name, c, t in variants:
         res, aux = evaluate(src, days[period], [model_strat("MODEL", model, t)], c)
         sm = full_summary(res["MODEL"], aux, c)
         row = _summ_row(name, "sensibilite", sm)
-        row.update({"venue": c["venue"]["execution"], "latency_ms": entry_latency_ms(c), "threshold": t})
+        row.update({"venue": c["venue"]["execution"], "latency_ms": entry_latency_ms(c), "threshold": t,
+                    "maker_entry": bool(c["maker_entry"]["enabled"]),
+                    "tp_as_maker": bool(c["exits"]["take_profit_as_maker"])})
         if len(res["MODEL"]):
             row["slippage"] = metrics.slippage_sensitivity(res["MODEL"])
             row["fees"] = _safe(lambda: metrics.fee_sensitivity(res["MODEL"], c))
